@@ -342,3 +342,77 @@ when to use primitives vs channels
 
 ```
 
+## 3 Fo's Concurrency Building Blocks
+
+# GoRoutines
+
+ green threads — threads that are managed by a language’s
+runtime 
+
+Go’s mechanism for hosting goroutines is an implementation of what’s called an M:N scheduler, which
+means it maps M green threads to N OS threads. Goroutines are then scheduled onto the green threads.
+When we have more goroutines than green threads available, the scheduler handles the distribution of the
+goroutines across the available threads and ensures that when these goroutines become blocked, other
+goroutines can be run. 
+
+Go follows a model of concurrency called the fork-join model
+
+Go runtime is smart enough so that when a variable is stilled reference and the goroutine that declared the 
+variable ends, the reference is transferred to the heap
+
+multiple goroutines can operate against the same address space
+
+BE CAREFUL:  the garbage collector does nothing to collect
+goroutines that have been abandoned somehow
+
+sample of benchmarking context switches
+
+note:
+
+Code can block waiting for something to be sent on the channel:
+<-signal
+
+```go
+func BenchmarkContextSwitch(b *testing.B) {
+	var wg sync.WaitGroup
+	begin := make(chan struct{})
+	c := make(chan struct{})
+	var token struct{}
+	sender := func() {
+		defer wg.Done()
+		//1 Here we wait until we’re told to begin. We don’t want the cost of setting up and starting each
+		//goroutine to factor into the measurement of context switching.
+		<-begin
+		for i := 0; i < b.N; i++ {
+			//2 Here we send messages to the receiver goroutine. A struct{}{} is called an empty struct and takes
+			//up no memory; thus, we are only measuring the time it takes to signal a message.
+			c <- token
+		}
+	}
+	receiver := func() {
+		defer wg.Done()
+		<-begin
+		for i := 0; i < b.N; i++ {
+			//3 Here we receive a message but do nothing with it.
+			<-c
+		}
+	}
+	wg.Add(2)
+	go sender()
+	go receiver()
+	// 4 Here we begin the performance timer.
+	b.StartTimer()
+	//5 Here we tell the two goroutines to begin, by closing the channel to unblock the sender and reciever goroutines
+	close(begin)
+	wg.Wait()
+}
+
+
+```
+
+goroutine context switches is faster than OS context switches
+
+# sync package
+
+
+
