@@ -422,3 +422,263 @@ goroutine context switches is faster than OS context switches
 # sync package
 
 ## WaitGroup
+
+WaitGroup is a great way to wait for a set of concurrent operations to complete when you 
+
+either don’t care about the result of the concurrent operation, or 
+
+you have other means of collecting their results
+
+```go
+var wg sync.WaitGroup
+wg.Add(1)
+go func() {
+	defer wg.Done()
+	fmt.Println("1st goroutine sleeping...")
+	time.Sleep(1)
+}()
+wg.Add(1)
+go func() {
+	defer wg.Done()
+	fmt.Println("2nd goroutine sleeping...")
+	time.Sleep(2)
+}()
+wg.Wait()
+fmt.Println("All goroutines complete.")
+
+```
+
+You can think of a WaitGroup like a concurrent-safe counter
+
+## Mutex and RWMutex
+
+Mutex stands for “mutual exclusion” and is a way to guard
+critical sections of your program.
+
+example of using regular mutex:
+
+```go
+var count int
+var lock sync.Mutex
+increment := func() {
+	lock.Lock()
+	defer lock.Unlock()
+	count++
+	fmt.Printf("Incrementing: %d\n", count)
+}
+decrement := func() {
+	lock.Lock()
+	defer lock.Unlock()
+	count--
+	fmt.Printf("Decrementing: %d\n", count)
+}
+// Increment
+var arithmetic sync.WaitGroup
+for i := 0; i <= 5; i++ {
+	arithmetic.Add(1)
+	go func() {
+		defer arithmetic.Done()
+		increment()
+	}()
+}
+// Decrement
+for i := 0; i <= 5; i++ {
+	arithmetic.Add(1)
+	go func() {
+		defer arithmetic.Done()
+		decrement()
+	}()
+}
+arithmetic.Wait()
+fmt.Println("Arithmetic complete.")
+```
+
+always call Unlock within a defer statement
+
+The sync.RWMutex is conceptually the same thing as a Mutex : it guards access to memory; however,
+RWMutex gives you a little bit more control over the memory. You can request a lock for reading, in which
+case you will be granted access unless the lock is being held for writing. This means that an arbitrary
+number of readers can hold a reader lock so long as nothing else is holding a writer lock.
+
+
+```go
+producer := func(wg *sync.WaitGroup, l sync.Locker) {
+	defer wg.Done()
+	for i := 5; i > 0; i-- {
+		l.Lock()
+		l.Unlock()
+		time.Sleep(1)
+	}
+}
+observer := func(wg *sync.WaitGroup, l sync.Locker) {
+	defer wg.Done()
+	l.Lock()
+	defer l.Unlock()
+}
+test := func(count int, mutex, rwMutex sync.Locker) time.Duration {
+	var wg sync.WaitGroup
+	wg.Add(count + 1)
+	beginTestTime := time.Now()
+	go producer(&wg, mutex)
+	for i := count; i > 0; i-- {
+		go observer(&wg, rwMutex)
+	}
+	wg.Wait()
+	return time.Since(beginTestTime)
+}
+tw := tabwriter.NewWriter(os.Stdout, 0, 1, 2, ' ', 0)
+defer tw.Flush()
+var m sync.RWMutex
+fmt.Fprintf(tw, "Readers\tRWMutext\tMutex\n")
+for i := 0; i < 20; i++ {
+	count := int(math.Pow(2, float64(i)))
+	fmt.Fprintf(
+		tw,
+		"%d\t%v\t%v\n",
+		count,
+		test(count, &m, m.RLocker()), //RLocker inits a read lock for m
+		test(count, &m, &m),
+	)
+}
+
+
+```
+
+# cond
+
+.a rendezvous point for goroutines waiting for or announcing the occurrence
+of an event.
+
+```go
+//1 Here we instantiate a new Cond . The NewCond function takes in a type that satisfies the sync.Locker
+//interface. This is what allows the Cond type to facilitate coordination with other goroutines in a
+//concurrent-safe way.
+c := sync.NewCond(&sync.Mutex{})
+//2 Here we lock the Locker for this condition. This is necessary because the call to Wait automatically
+//calls Unlock on the Locker when entered.
+c.L.Lock()
+for conditionTrue() == false {
+//3 Here we wait to be notified that the condition has occurred. This is a blocking call and the goroutine
+//will be suspended
+	c.Wait()
+}
+
+//4 Here we unlock the Locker for this condition. This is necessary because when the call to Wait exits,
+//it calls Lock on the Locker for the condition.
+c.L.Unlock()
+```
+
+Note that the call to Wait doesn’t just block, it suspends the current
+goroutine, allowing other goroutines to run on the OS thread.
+
+we use conditions to coordinate goroutines 
+
+A few other things happen when you call
+Wait : upon entering Wait , Unlock is called on the Cond variable’s Locker , and upon exiting Wait , Lock
+is called on the Cond variable’s Locker
+
+sample of coordinatign inserts ad removes in a queue:
+
+```go
+//1 First, we create our condition using a standard sync.Mutex as the Locker 
+c := sync.NewCond(&sync.Mutex{})
+//2 Next, we create a slice with a length of zero. Since we know we’ll eventually add 10 items, we
+//instantiate it with a capacity of 10
+queue := make([]interface{}, 0, 10)
+removeFromQueue := func(delay time.Duration) {
+	time.Sleep(delay)
+	//8 We once again enter the critical section for the condition so we can modify data pertinent to the
+	//condition.
+	c.L.Lock()
+	//9 Here we simulate dequeuing an item by reassigning the head of the slice to the second item.
+	queue = queue[1:]
+	fmt.Println("Removed from queue")
+	//10 Here we exit the condition’s critical section since we’ve successfully dequeued an item
+	c.L.Unlock()
+
+	//11 Here we let a goroutine waiting on the condition know that something has occurred.
+	c.Signal()
+}
+for i := 0; i < 10; i++ {
+	//3 We enter the critical section for the condition by calling Lock on the condition’s Locker 
+	c.L.Lock()
+	// 4 Here we check the length of the queue in a loop. This is important because a signal on the condition
+	//doesn’t necessarily mean what you’ve been waiting for has occurred — only that something has
+	//occurred.
+	for len(queue) == 2 {
+		//5 We call Wait , which will suspend the main goroutine until a signal on the condition has been sent.
+		c.Wait()
+	}
+	fmt.Println("Adding to queue")
+	queue = append(queue, struct{}{})
+	//6 Here we create a new goroutine that will dequeue an element after one second.
+	go removeFromQueue(1 * time.Second)
+
+	//7 Here we exit the condition’s critical section since we’ve successfully enqueued an item.
+	c.L.Unlock()
+}
+
+```
+
+we use signal to signal that one goroutine is done
+
+we can use broadcast to broadcast all goroutines are done waiting
+
+button click example, pretty hard to follow so read carefully:
+
+```go
+//1 We define a type Button that contains a condition, Clicked 
+type Button struct {
+	Clicked *sync.Cond
+}
+button := Button{Clicked: sync.NewCond(&sync.Mutex{})}
+//2 Here we define a convenience function that will allow us to register functions to handle signals from
+//a condition. Each handler is run on its own goroutine, and subscribe will not exit until that
+//goroutine is confirmed to be running.
+subscribe := func(c *sync.Cond, fn func()) {
+	var goroutineRunning sync.WaitGroup
+	goroutineRunning.Add(1)
+	go func() {
+		goroutineRunning.Done()
+		c.L.Lock()
+		defer c.L.Unlock()
+		c.Wait()
+		fn()
+	}()
+	goroutineRunning.Wait()
+}
+//3 Here we set a handler for when the mouse button is raised. It in turn calls Broadcast on the
+//Clicked Cond to let all handlers know that the mouse button has been clicked (a more robust
+//implementation would first check that it had been depressed).
+
+//3 Here we create a WaitGroup . This is done only to ensure our program doesn’t exit before our writes
+//to stdout occur.
+var clickRegistered sync.WaitGroup
+clickRegistered.Add(3)
+
+
+//4 Here we register a handler that simulates maximizing the button’s window when the button is
+//clicked.
+subscribe(button.Clicked, func() {
+	fmt.Println("Maximizing window.")
+	clickRegistered.Done()
+})
+
+//5 Here we register a handler that simulates displaying a dialog box when the mouse is clicked.
+subscribe(button.Clicked, func() {
+	fmt.Println("Displaying annoying dialog box!")
+	clickRegistered.Done()
+})
+
+//6 we simulate a user raising the mouse button from having clicked the application’s button.
+subscribe(button.Clicked, func() {
+	fmt.Println("Mouse clicked.")
+	clickRegistered.Done()
+})
+button.Clicked.Broadcast()
+clickRegistered.Wait()
+
+
+```
+
+basicall
