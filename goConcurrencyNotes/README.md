@@ -1,6 +1,6 @@
-## 1 Introduction To Concurrency
+# 1 Introduction To Concurrency
 
-race conditions
+##  race conditions
 
 
 A race condition occurs when two or more operations must execute in the correct order, but the program
@@ -19,13 +19,13 @@ basic example
 ```
 no guarantee that the printf will execute
 
-Atomicity
+## Atomicity
 
 
 When something is considered atomic, or to have the property of atomicity, this means that within the
 context that it is operating, it is indivisible, or uninterruptible
 
-Memory Access Synchronization
+## Memory Access Synchronization
 
 use sync.Mutex
 
@@ -46,6 +46,9 @@ if value == 0 {
 memoryAccess.Unlock()
 
 ```
+
+## Deadlock
+
 
 A deadlocked program is one in which all concurrent processes are waiting on one another.
 
@@ -104,6 +107,10 @@ Let’s examine our contrived program and determine if it meets all four conditi
 3. We haven’t given any way for our goroutines to be preempted.
 
 4. Our first invocation of printSum is waiting on our second invocation, and vice versa.
+
+
+## livelocks
+
 
 Livelocks are programs that are actively performing concurrent operations, but these operations do
 nothing to move the state of the program forward
@@ -292,7 +299,7 @@ almost twice the amount of work done!
 
 starvation can cause your program to behave inefficiently or incorrectly
 
-## 2 Modeling Your Code: Communicating Sequential Processes
+# 2 Modeling Your Code: Communicating Sequential Processes
 
 The Difference Between Concurrency and Parallelism : Concurrency is a property of the code; parallelism is a property of the running program.
 
@@ -342,9 +349,9 @@ when to use primitives vs channels
 
 ```
 
-## 3 Fo's Concurrency Building Blocks
+# 3 Go's Concurrency Building Blocks
 
-# GoRoutines
+## GoRoutines
 
  green threads — threads that are managed by a language’s
 runtime 
@@ -414,5 +421,4 @@ goroutine context switches is faster than OS context switches
 
 # sync package
 
-
-
+## WaitGroup
