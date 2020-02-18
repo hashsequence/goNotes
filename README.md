@@ -1,1 +1,1 @@
-Concurrency : [goNotes](goConcurrencyNotes/README.md)
+Concurrency : [goConcurrencyNotes](goConcurrencyNotes/README.md)
