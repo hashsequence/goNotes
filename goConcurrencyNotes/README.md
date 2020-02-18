@@ -647,9 +647,6 @@ subscribe := func(c *sync.Cond, fn func()) {
 	}()
 	goroutineRunning.Wait()
 }
-//3 Here we set a handler for when the mouse button is raised. It in turn calls Broadcast on the
-//Clicked Cond to let all handlers know that the mouse button has been clicked (a more robust
-//implementation would first check that it had been depressed).
 
 //3 Here we create a WaitGroup . This is done only to ensure our program doesn’t exit before our writes
 //to stdout occur.
@@ -675,10 +672,22 @@ subscribe(button.Clicked, func() {
 	fmt.Println("Mouse clicked.")
 	clickRegistered.Done()
 })
+
+//3 Here we set a handler for when the mouse button is raised. It in turn calls Broadcast on the
+//Clicked Cond to let all handlers know that the mouse button has been clicked (a more robust
+//implementation would first check that it had been depressed).
+
 button.Clicked.Broadcast()
 clickRegistered.Wait()
 
 
 ```
 
-basicall
+basically,
+
+the clickeRegistered is to ensure that the functions fn() actually run to print to stdout
+
+the goroutineRunning is used to ensure that the go routine in the subscribe function call is actually kicked off
+
+the button.Clicked is to ensure that the go routines in each subscribe function call is running and waiting before
+calling fn()
