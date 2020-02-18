@@ -1,5 +1,52 @@
 ## 1 Introduction To Concurrency
 
+race conditions
+
+
+A race condition occurs when two or more operations must execute in the correct order, but the program
+has not been written so that this order is guaranteed to be maintained.
+
+basic example
+```go
+ var data int
+2 go func() {
+3 	data++
+4 }()
+5 if data == 0 {
+6 	fmt.Printf("the value is %v.\n", data)
+7 }
+
+```
+no guarantee that the printf will execute
+
+Atomicity
+
+
+When something is considered atomic, or to have the property of atomicity, this means that within the
+context that it is operating, it is indivisible, or uninterruptible
+
+Memory Access Synchronization
+
+use sync.Mutex
+
+```go
+var memoryAccess sync.Mutex
+var value int
+go func() {
+	memoryAccess.Lock()
+	value++
+	memoryAccess.Unlock()
+}()
+memoryAccess.Lock()
+if value == 0 {
+	fmt.Printf("the value is %v.\n", value)
+} else {
+	fmt.Printf("the value is %v.\n", value)
+}
+memoryAccess.Unlock()
+
+```
+
 A deadlocked program is one in which all concurrent processes are waiting on one another.
 
 
