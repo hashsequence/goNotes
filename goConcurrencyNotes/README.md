@@ -952,3 +952,272 @@ when working with a Pool , just remember the following points:
 * Objects in the pool must be roughly uniform in makeup.
 
 # Channels
+
+making a basic channel
+
+```go
+var dataStream chan interface{}
+dataStream = make(chan interface{}
+```
+
+read only channel (as in you get messages from the channel):
+
+```go
+var dataStream <-chan interface{}
+dataStream := make(<-chan interface{})
+
+```
+
+send only channel ( as in you take in messages)
+
+```go
+var dataStream chan<- interface{}
+dataStream := make(chan<- interface{})
+
+```
+Go will implicitly convert bidirectional channels to unidirectional channels when needed. 
+
+
+Channels in Go are said to be blocking. This means that any goroutine that
+
+attempts to write to a channel that is full will wait until the channel has been emptied, and any goroutine
+
+that attempts to read from a channel that is empty will wait until at least one item is placed on it.
+
+
+ we can read from a closed channel as well
+
+```go
+intStream := make(chan int)
+close(intStream)
+integer, ok := <- intStream
+fmt.Printf("(%v): %v", ok, integer)
+
+```
+
+we can also range over a channel:
+
+```go
+intStream := make(chan int)
+go func() {
+	defer close(intStream)
+	for i := 1; i <= 5; i++ {
+		intStream <- i
+	}
+}()
+for integer := range intStream {
+	fmt.Printf("%v ", integer)
+}
+
+```
+loop will break when the channel closes
+
+
+you can use channels to signal multiple routines simultaneously:
+
+```go
+begin := make(chan interface{})
+var wg sync.WaitGroup
+for i := 0; i < 5; i++ {
+	wg.Add(1)
+	go func(i int) {
+		defer wg.Done()
+		//1 here the goroutine waits til it can read
+		<-begin
+		fmt.Printf("%v has begun\n", i)
+	}(i)
+}
+fmt.Println("Unblocking goroutines...")
+//2 when we close the channel the channel can be read and unblocks all go routines
+close(begin)
+wg.Wait()
+
+```
+
+output:
+
+
+Unblocking goroutines...
+
+4 has begun
+
+2 has begun
+
+3 has begun
+
+0 has begun
+
+1 has begun
+
+
+sync.Cond type to perform the same behavior, above
+
+
+* buffered channels
+
+
+Buffered channels are channels that are given a capacity when they’re
+instantiated. This means that even if no reads are performed on the channel, a goroutine can still perform n
+writes, where n is the capacity of the buffered channel. 
+
+
+
+```go
+var dataStream chan interface{}
+//Here we create a buffered channel with a capacity of four. This means that we can place four things
+//onto the channel regardless of whether it’s being read from.
+dataStream = make(chan interface{}, 4)
+```
+
+these two are the same:
+
+```go
+a := make(chan int)
+b := make(chan int, 0)
+```
+channels block if we are writing into a full channel or reading from an empty channel
+
+An unbuffered channel has a capacity of zero and so it’s already full before any writes. 
+
+buffered channels is like an in memory fifo
+
+example:
+
+```go
+c := make(chan rune, 4)
+c <- 'A'
+c <- 'B'
+c <- 'C'
+c <- 'D' 
+//now the buffer is full and if we try to do a fifth write it will block
+c <- 'E' 
+//we can only unblock if there is a read somewhere like
+
+//... in some other goroutine:
+<- c
+```
+differences between capacity 0 and 1 in channels:
+
+
+If the channel is unbuffered (capacity is zero), then communication succeeds only when the sender and receiver are both ready.
+
+If the channel is buffered (capacity >= 1), then send succeeds without blocking if the channel is not full and receive succeeds without blocking if the buffer is not empty.
+
+When putting a value to the intChannelZero like intChannelZero <- 1, where the value be saved?
+
+The value is copied from the sender to the receiver. The value is not saved anywhere other than whatever temporary variables the implementation might use.
+
+The differences between intChannelZero and intChannelOne when putting a value to them.
+
+Send on intChannelZero blocks until a receiver is ready.
+
+Send on intChannelOne blocks until space is available in the buffer.
+
+
+
+example of buffered channels:
+
+```go
+var stdoutBuff bytes.Buffer
+defer stdoutBuff.WriteTo(os.Stdout)
+intStream := make(chan int, 4)
+go func() {
+	defer close(intStream)
+	defer fmt.Fprintln(&stdoutBuff, "Producer Done.")
+	for i := 0; i < 5; i++ {
+		fmt.Fprintf(&stdoutBuff, "Sending: %d\n", i)
+		intStream <- i
+	}
+}()
+for integer := range intStream {
+	fmt.Fprintf(&stdoutBuff, "Received %v.\n", integer)
+}
+
+```
+
+output:
+
+
+Sending: 0
+
+Sending: 1
+
+Sending: 2
+
+Sending: 3
+
+Sending: 4
+
+Producer Done.
+
+Received 0.
+
+Received 1.
+
+Received 2.
+
+Received 3.
+
+Received 4.
+
+
+nil channels will deadlock and panic:
+
+```go
+var dataStream chan interface{}
+<-dataStream
+```
+
+```
+fatal error: all goroutines are asleep - deadlock!
+goroutine 1 [chan receive (nil chan)]:
+main.main()
+/tmp/babel-23079IVB/go-src-23079O4q.go:9 +0x3f
+exit status 2
+```
+
+tidbits:
+
+goroutine that owns a channel should:
+
+
+1. Instantiate the channel.
+
+2. Perform writes, or pass ownership to another goroutine.
+
+3. Close the channel.
+
+4. Ecapsulate the previous three things in this list and expose them via a reader channel.
+
+
+as a consumer:
+
+
+1. Knowing when a channel is closed.
+
+2. Responsibly handling blocking for any reason.
+
+
+example:
+
+```go
+chanOwner := func() <-chan int {
+	resultStream := make(chan int, 5)
+	go func() {
+		defer close(resultStream)
+		for i := 0; i <= 5; i++ {
+			resultStream <- i
+		}
+	}()
+	return resultStream
+}
+resultStream := chanOwner()
+//using range makes sure we are done reading after closing
+for result := range resultStream {
+	fmt.Printf("Received: %d\n", result)
+}
+fmt.Println("Done receiving!")
+
+```
+
+# select
