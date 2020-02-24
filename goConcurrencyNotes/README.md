@@ -1315,4 +1315,4 @@ we can control the number of OS threads that wil host the Go work queues:
 runtime.GOMAXPROCS(runtime.NumCPU())
 ```
 
-# Concurrency Patterns in Go
+# 4 Concurrency Patterns in Go
