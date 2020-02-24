@@ -691,3 +691,152 @@ the goroutineRunning is used to ensure that the go routine in the subscribe func
 
 the button.Clicked is to ensure that the go routines in each subscribe function call is running and waiting before
 calling fn()
+
+# once
+
+once only allow the function passed to once.do to be called once
+```go
+var count int
+increment := func() {
+	count++
+}
+var once sync.Once
+var increments sync.WaitGroup
+increments.Add(100)
+for i := 0; i < 100; i++ {
+	go func() {
+		defer increments.Done()
+		once.Do(increment)
+	}()
+}
+increments.Wait()
+fmt.Printf("Count is %d\n", count)
+
+```
+output:
+
+count is 1
+
+heres another example:
+
+```go
+var count int
+increment := func() { count++ }
+decrement := func() { count-- }
+var once sync.Once
+once.Do(increment)
+once.Do(decrement)
+fmt.Printf("Count: %d\n", count)
+
+```
+
+output:
+count: 1
+
+This is because sync.Once only counts the number of
+times Do is called, not how many times unique functions passed into Do are called. 
+
+heres another example where you can deadlock with once:
+
+```go
+var onceA, onceB sync.Once
+var initB func()
+initA := func() { onceB.Do(initB) }
+initB = func() { onceA.Do(initA) }
+onceA.Do(initA)
+```
+
+its calling itself to call itself once, but it can't exit since it needs to call itself to exit
+
+# pool
+
+Pool is a concurrent-safe implementation of the object pool pattern.
+
+At a high level, a the pool pattern is a way to create and make available a fixed number, or pool, of things
+
+for use. It’s commonly used to constrain the creation of things that are expensive (e.g., database
+
+connections) so that only a fixed number of them are ever created, but an indeterminate number of
+
+operations can still request access to these things.
+
+```go
+myPool := &sync.Pool{
+	New: func() interface{} {
+		fmt.Println("Creating new instance.")
+		return struct{}{}
+	},
+}
+//1 Here we call Get on the pool. These calls will invoke the New function defined on the pool since
+//instances haven’t yet been instantiated.
+myPool.Get()
+instance := myPool.Get()
+//2 Here we put an instance previously retrieved back in the pool. This increases the available number
+//of instances to one.
+myPool.Put(instance)
+//3 When this call is executed, we will reuse the instance previously allocated and put it back in the
+//pool. The New function will not be invoked.
+myPool.Get()
+
+```
+
+here we only allocate 4kb of items in the pool, so we can never grab more than that, in this example if
+
+we didnt use a pool we would potentialy use more 1 gb of memory.
+
+```go
+var numCalcsCreated int
+calcPool := &sync.Pool{
+	New: func() interface{} {
+		numCalcsCreated += 1
+		mem := make([]byte, 1024)
+		return &mem
+	},
+}
+// Seed the pool with 4KB
+calcPool.Put(calcPool.New())
+calcPool.Put(calcPool.New())
+calcPool.Put(calcPool.New())
+calcPool.Put(calcPool.New())
+const numWorkers = 1024 * 1024
+var wg sync.WaitGroup
+wg.Add(numWorkers)
+for i := numWorkers; i > 0; i-- {
+	go func() {
+		defer wg.Done()
+		mem := calcPool.Get().(*[]byte)
+		defer calcPool.Put(mem)
+		// Assume something interesting, but quick is being done with
+		// this memory.
+	}()
+}
+wg.Wait()
+fmt.Printf("%d calculators were created.", numCalcsCreated)
+
+```
+
+the object pool design pattern is best used either when you have concurrent processes that
+
+require objects, but dispose of them very rapidly after instantiation, or when construction of these objects
+
+could negatively impact memory.
+
+
+when working with a Pool , just remember the following points:
+
+* When instantiating sync.Pool , give it a New member variable that is thread-safe when called.
+
+
+* When you receive an instance from Get , make no assumptions regarding the state of the object you
+
+receive back.
+
+
+* Make sure to call Put when you’re finished with the object you pulled out of the pool. Otherwise,
+
+the Pool is useless. Usually this is done with defer .
+
+
+* Objects in the pool must be roughly uniform in makeup.
+
+# Channels
