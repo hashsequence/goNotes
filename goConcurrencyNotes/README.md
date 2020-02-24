@@ -1221,3 +1221,98 @@ fmt.Println("Done receiving!")
 ```
 
 # select
+
+ channels are the glue that binds goroutines together
+
+  select statement is the glue that binds channels together
+
+
+
+sample layout
+
+```go
+var c1, c2 <-chan interface{}
+var c3 chan<- interface{}
+select {
+case <- c1:
+// Do something
+case <- c2:
+// Do something
+case c3<- struct{}{}:
+// Do something
+}
+
+```
+Unlike switch blocks, case statements in a select block aren’t tested sequentially, and execution won’t
+automatically fall through if none of the criteria are met.
+
+
+If none of the channels are ready, the entire select statement blocks.
+
+in the go spec:
+
+```
+If one or more of the communications can proceed, a single one that can proceed is chosen via a uniform pseudo-random selection. 
+Otherwise, if there is a default case, that case is chosen. If there is no default case, the "select" statement blocks until
+ at least one of the communications can proceed.
+```
+
+this is how you timeout channels:
+
+```go
+var c <-chan int
+select {
+case <-c:
+case <-time.After(1 * time.Second):
+	fmt.Println("Timed out.")
+}
+
+```
+
+we can also have default behaviour if no channels are ready:
+
+```go
+start := time.Now()
+var c1, c2 <-chan int
+select {
+case <-c1:
+case <-c2:
+default:
+	fmt.Printf("In default after %v\n\n", time.Since(start))
+}
+
+```
+
+this is how we put everything together in to a loop:
+
+```go
+one := make(chan interface{})
+go func() {
+	time.Sleep(5 * time.Second)
+	close(done)
+}()
+workCounter := 0
+loop:
+for {
+	select {
+	case <-done:
+		break loop
+	default:
+	}
+	// Simulate work
+	workCounter++
+	time.Sleep(1 * time.Second)
+}
+fmt.Printf("Achieved %v cycles of work before signalled to stop.\n", workCounter)
+
+```
+
+# GOMAXPROCS
+
+we can control the number of OS threads that wil host the Go work queues:
+
+```go
+runtime.GOMAXPROCS(runtime.NumCPU())
+```
+
+## Concurrency Patterns in Go
