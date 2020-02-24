@@ -544,7 +544,7 @@ for i := 0; i < 20; i++ {
 
 ```
 
-# cond
+## cond
 
 .a rendezvous point for goroutines waiting for or announcing the occurrence
 of an event.
@@ -692,7 +692,7 @@ the goroutineRunning is used to ensure that the go routine in the subscribe func
 the button.Clicked is to ensure that the go routines in each subscribe function call is running and waiting before
 calling fn()
 
-# once
+## once
 
 once only allow the function passed to once.do to be called once
 ```go
@@ -748,7 +748,7 @@ onceA.Do(initA)
 
 its calling itself to call itself once, but it can't exit since it needs to call itself to exit
 
-# pool
+## pool
 
 Pool is a concurrent-safe implementation of the object pool pattern.
 
@@ -951,7 +951,7 @@ when working with a Pool , just remember the following points:
 
 * Objects in the pool must be roughly uniform in makeup.
 
-# Channels
+## Channels
 
 making a basic channel
 
@@ -1220,7 +1220,7 @@ fmt.Println("Done receiving!")
 
 ```
 
-# select
+## select
 
  channels are the glue that binds goroutines together
 
@@ -1307,7 +1307,7 @@ fmt.Printf("Achieved %v cycles of work before signalled to stop.\n", workCounter
 
 ```
 
-# GOMAXPROCS
+## GOMAXPROCS
 
 we can control the number of OS threads that wil host the Go work queues:
 
@@ -1315,4 +1315,4 @@ we can control the number of OS threads that wil host the Go work queues:
 runtime.GOMAXPROCS(runtime.NumCPU())
 ```
 
-## Concurrency Patterns in Go
+# Concurrency Patterns in Go
