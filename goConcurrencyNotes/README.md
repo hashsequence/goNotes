@@ -1425,8 +1425,9 @@ for { // Either loop infinitely or range over something
 			case <-done:
 				return
 			default:
+				// Do non-preemptable work
 			}
-			// Do non-preemptable work
+			// Do non-preemptable work or here
 		}
 		```
 	
