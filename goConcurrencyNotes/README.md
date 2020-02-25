@@ -1396,3 +1396,39 @@ Why pursue confinement if we have synchronization available to us?
 The answer is improved performance and reduced cognitive load on developers. Synchronization comes with a cost, and if you can avoid it you won’t have any critical sections, and therefore you won’t have to pay the cost of synchronizing them.
 
 ## The for-select Loop
+
+```go
+for { // Either loop infinitely or range over something
+	select {
+	// Do some work with channels
+	}
+}
+
+```
+
+* scenarios you'll use this pattern
+	* Sending iteration variables out on a channel
+		```go
+		for _, s := range []string{"a", "b", "c"} {
+			select {
+			case <-done:
+				return
+			case stringStream <- s:
+			}
+		}
+			
+		```
+	* Looping infinitely waiting to be stopped
+		```go
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			// Do non-preemptable work
+		}
+		```
+	
+## Preventing Goroutine Leaks
+
