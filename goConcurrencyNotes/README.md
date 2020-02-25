@@ -1433,3 +1433,148 @@ for { // Either loop infinitely or range over something
 	
 ## Preventing Goroutine Leaks
 
+* The goroutine has a few paths to termination:
+	* When it has completed its work.
+	* When it cannot continue its work due to an unrecoverable error.
+	* When it’s told to stop working.
+
+example of bad goroutine:
+
+```go
+doWork := func(strings <-chan string) <-chan interface{} {
+	completed := make(chan interface{})
+	go func() {
+		defer fmt.Println("doWork exited.")
+		defer close(completed)
+		for s := range strings {
+			// Do something interesting
+			fmt.Println(s)
+		}
+	}()
+	return completed
+}
+doWork(nil)
+// Perhaps more work is done here
+fmt.Println("Done.")
+
+```
+
+the strings channel will never actually gets any strings written onto it, and the goroutine containing doWork will remain in memory for the lifetime of this process (we would even deadlock if we joined the goroutine within doWork and the main goroutine).
+
+we can prevent this by using a signal between the parent and child to signal the child to terminate:
+
+
+```go
+doWork := func(
+	done <-chan interface{},
+	strings <-chan string,
+) <-chan interface{} {
+	//1 Here we pass the done channel to the doWork function. As a convention, this channel is the first parameter.
+	terminated := make(chan interface{})
+	go func() {
+		defer fmt.Println("doWork exited.")
+		defer close(terminated)
+		for {
+			select {
+			case s := <-strings:
+				// Do something interesting
+				fmt.Println(s)
+			//2 On this line we see the ubiquitous for-select pattern in use. One of our case statements is checking whether our done channel has been signaled. If it has, we return from the goroutine.
+			case <-done:
+				return
+			}
+		}
+	}()
+	return terminated
+}
+done := make(chan interface{})
+terminated := doWork(done, nil)
+//3 Here we create another goroutine that will cancel the goroutine spawned in doWork if more than one second passes.
+go func() {
+	// Cancel the operation after 1 second.
+	time.Sleep(1 * time.Second)
+	fmt.Println("Canceling doWork goroutine...")
+	close(done)
+}()
+//4 This is where we join the goroutine spawned from doWork with the main goroutine.
+<-terminated
+fmt.Println("Done.")
+
+```
+
+heres another example where of where the goroutine ias blocked on attempting to write a value to a channel:
+
+```go
+newRandStream := func() <-chan int {
+	randStream := make(chan int)
+	go func() {
+		defer fmt.Println("newRandStream closure exited.")
+		defer close(randStream)
+		for {
+			randStream <- rand.Int()
+		}
+	}()
+	return randStream
+}
+randStream := newRandStream()
+fmt.Println("3 random ints:")
+for i := 1; i <= 3; i++ {
+	fmt.Printf("%d: %d\n", i, <-randStream)
+}
+
+```
+
+output:
+
+```console
+3 random ints:
+1: 5577006791947779410
+2: 8674665223082153551
+3: 6129484611666145821
+```
+
+notice "newRandStream closure exited." was never printed 
+
+we can fix this by using the for-select and having a read only channel done <-chan interface{},
+closing the done channel will unblock the channel, and return in the goroutine
+
+```go
+newRandStream := func(done <-chan interface{}) <-chan int {
+	randStream := make(chan int)
+	go func() {
+		defer fmt.Println("newRandStream closure exited.")
+		defer close(randStream)
+		for {
+			select {
+			case randStream <- rand.Int():
+			case <-done:
+				return
+			}
+		}
+	}()
+	return randStream
+}
+done := make(chan interface{})
+randStream := newRandStream(done)
+fmt.Println("3 random ints:")
+for i := 1; i <= 3; i++ {
+	fmt.Printf("%d: %d\n", i, <-randStream)
+}
+close(done)
+// Simulate ongoing work
+time.Sleep(1 * time.Second)
+
+
+```
+
+```console
+3 random ints:
+1: 5577006791947779410
+2: 8674665223082153551
+3: 6129484611666145821
+newRandStream closure exited
+```
+
+REMEMBER:  If a goroutine is responsible for creating a goroutine, it is also responsible for ensuring it can stop the goroutine.
+
+## The or-channel
