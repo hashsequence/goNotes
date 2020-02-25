@@ -1578,3 +1578,105 @@ newRandStream closure exited
 REMEMBER:  If a goroutine is responsible for creating a goroutine, it is also responsible for ensuring it can stop the goroutine.
 
 ## The or-channel
+
+At times you may find yourself wanting to combine one or more done channels into a single done channel
+that closes if any of its component channels close.
+
+
+This pattern creates a composite done channel through recursion and goroutines:
+
+```go
+//1 Here we have our function, or , which takes in a variadic slice of channels and returns a single channel.
+var or func(channels ...<-chan interface{}) <-chan interface{}
+or = func(channels ...<-chan interface{}) <-chan interface{} {
+	switch len(channels) {
+	//2 Since this is a recursive function, we must set up termination criteria. The first is that if the variadic
+	//slice is empty, we simply return a nil channel. This is consistant with the idea of passing in no
+	//channels; we wouldn’t expect a composite channel to do anything.
+	case 0:
+		return nil
+	//3 Our second termination criteria states that if our variadic slice only contains one element, we just
+	//return that element.
+	case 1:
+		return channels[0]
+	}
+	orDone := make(chan interface{})
+	//4 Here is the main body of the function, and where the recursion happens. We create a goroutine so that
+	//we can wait for messages on our channels without blocking.
+	go func() {
+		defer close(orDone)
+		switch len(channels) {
+		//5 Because of how we’re recursing, every recursive call to or will at least have two channels. As an
+		//optimization to keep the number of goroutines constrained, we place a special case here for calls to
+		//or with only two channels.
+		case 2:
+			select {
+			case <-channels[0]:
+			case <-channels[1]:
+			}
+		default:
+			select {
+			case <-channels[0]:
+			case <-channels[1]:
+			case <-channels[2]:
+			//6 Here we recursively create an or-channel from all the channels in our slice after the third index, and
+			//then select from this. This recurrence relation will destructure the rest of the slice into or-channels to
+			//form a tree from which the first signal will return. We also pass in the orDone channel so that when
+			//goroutines up the tree exit, goroutines down the tree also exit.
+			case <-or(append(channels[3:], orDone)...):
+			}
+		}
+	}()
+	return orDone
+}
+
+```
+This is a fairly concise function that enables you to combine any number of channels together into a single
+channel that will close as soon as any of its component channels are closed, or written to. 
+
+
+here is how we use it in this example:
+
+
+```go
+//1 This function simply creates a channel that will close when the time specified in the after elapses.
+sig := func(after time.Duration) <-chan interface{} {
+	c := make(chan interface{})
+	go func() {
+		defer close(c)
+		time.Sleep(after)
+	}()
+	return c
+}
+//2 Here we keep track of roughly when the channel from the or function begins to block.
+start := time.Now()
+<-or(
+	sig(2*time.Hour),
+	sig(5*time.Minute),
+	sig(1*time.Second),
+	sig(1*time.Hour),
+	sig(1*time.Minute),
+)
+fmt.Printf("done after %v", time.Since(start))
+
+
+```
+
+output:
+
+```console
+done after 1.000216772s
+```
+
+the channel created by 
+```go 
+sig(1*time.Second) 
+```
+causes the channel to all close
+
+we can to use this channel to optimize memory because the channels after one 
+channel already closes or is read wont be created as it is not neccessary anymore
+
+
+the context package way gives an alternative to th or - way
+## error handling
