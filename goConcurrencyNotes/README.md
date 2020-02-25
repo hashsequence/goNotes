@@ -1316,3 +1316,83 @@ runtime.GOMAXPROCS(runtime.NumCPU())
 ```
 
 # 4 Concurrency Patterns in Go
+
+## confinement 
+
+these are the options for safe operations:
+
+1. Synchronization primitives for sharing memory (sync.mutex)
+2. Synchronization via communication (e.g. channels)
+3. immutable data
+4. Data protected by confinement
+
+Confinement is the simple yet powerful idea of ensuring information is only ever available from one concurrent process.
+
+
+There are two kinds of confinement possible: ad hoc and lexical.
+
+
+adhoc confinement is acheived through convention, meaning the coder enforces themselves
+
+here is an example:
+
+```go
+data := make([]int, 4)
+loopData := func(handleData chan<- int) {
+	defer close(handleData)
+	for i := range data {
+		handleData <- data[i]
+	}
+}
+handleData := make(chan int)
+go loopData(handleData)
+for num := range handleData {
+	fmt.Println(num)
+}
+
+```
+
+We can see that the data slice of integers is available from both the loopData function and the loop over the handleData channel,
+but over time developers might make mistakes and break their own convention
+
+
+lexical confinement involves using lexical scope to expose only the correct data and concurrency
+primitives for multiple concurrent processes to use.
+
+example of lexical confinement:
+
+```go
+chanOwner := func() <-chan int {
+	//1 Here we instantiate the channel within the lexical scope of the chanOwner function. This limits the
+	//scope of the write aspect of the results channel to the closure defined below it. In other words, it
+	//confines the write aspect of this channel to prevent other goroutines from writing to it.
+	results := make(chan int, 5)
+	go func() {
+		defer close(results)
+		for i := 0; i <= 5; i++ {
+			results <- i
+		}
+	}()
+	return results
+}
+consumer := func(results <-chan int) {
+	//3 Here we receive a read-only copy of an int channel. By declaring that the only usage we require is
+	// read access, we confine usage of the channel within the consume function to only reads.
+	for result := range results {
+		fmt.Printf("Received: %d\n", result)
+	}
+	fmt.Println("Done receiving!")
+}
+//2 Here we receive the read aspect of the channel and we’re able to pass it into the consumer, which
+//can do nothing but read from it. Once again this confines the main goroutine to a read-only view of
+//the channel.
+results := chanOwner()
+consumer(results)
+```
+
+Why pursue confinement if we have synchronization available to us? 
+
+
+The answer is improved performance and reduced cognitive load on developers. Synchronization comes with a cost, and if you can avoid it you won’t have any critical sections, and therefore you won’t have to pay the cost of synchronizing them.
+
+## The for-select Loop
