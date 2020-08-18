@@ -1720,3 +1720,285 @@ for result := range checkStatus(done, urls...) {
 ```
 
 ## Pipelines
+
+
+A pipeline is just an abstraction in your system, usually in the form 
+of processing streams, or batches of data and breaks down a process or worflow in
+terms of stages.
+
+
+what are the properties of stages?
+
+
+* A stage consumes and returns the same type
+
+* a stage must be reified by the language so that it may be passed around,
+(in go functions are reified and can be passed around, first class functions, etc)
+
+
+we could think of this as functional programming in one perspective:
+
+here is an example of transforming an array of ints:
+
+```go
+	multiply := func(values []int, multiplier int) []int {
+		multipliedValues := make([]int, len(values))
+		for i, v := range values {
+			multipliedValues[i] = v * multiplier
+		}
+		return multipliedValues
+	}
+
+	add := func(values []int, additive int) []int {
+		addedValues := make([]int, len(values))
+		for i, v := range values {
+			addedValues[i] = v + additive
+		}
+		return addedValues
+	}
+	ints := []int{1, 2, 3, 4}
+	for _, v := range add(multiply(ints, 2), 1) {
+		fmt.Println(v)
+	}
+
+```
+
+the above example is what known as batch processing since 
+we process a batch a time. in stream processing, we process
+the values one at a time:
+
+```go
+multiply := func(value, multiplier int) int {
+		return value * multiplier
+	}
+	add := func(value, additive int) int {
+		return value + additive
+	}
+	ints := []int{1, 2, 3, 4}
+	for _, v := range ints {
+		fmt.Println(multiply(add(multiply(v, 2), 1), 2))
+	}
+
+```
+
+* So now let's use channels to make pipelines
+
+
+```go
+//generates a recieve only stream, and runs a goroutine that closes the stream
+//if you send a value into the done stream, otherwise it will keep
+//sending the integers into the stream
+generator := func(done <-chan interface{}, integers ...int) <-chan int {
+		intStream := make(chan int)
+		go func() {
+			defer close(intStream)
+			for _, i := range integers {
+				select {
+				case <-done:
+					return
+				case intStream <- i:
+				}
+			}
+		}()
+		return intStream
+	}
+	//high level of what is going on
+	//basically we are returning the transformation of the streams
+	//and in each function we run a go routine that iterates through
+	//the streams at each stage
+	//when we are done printing all the numbers that are completely transformed
+	//we close the done channels which would in turn cleanup the goroutines
+	multiply := func(
+		done <-chan interface{},
+		intStream <-chan int,
+		multiplier int,
+	) <-chan int {
+		multipliedStream := make(chan int)
+		go func() {
+			defer close(multipliedStream)
+			for i := range intStream {
+				select {
+				case <-done:
+					return
+				case multipliedStream <- i * multiplier:
+				}
+			}
+		}()
+		return multipliedStream
+	}
+	add := func(
+		done <-chan interface{},
+		intStream <-chan int,
+		additive int,
+	) <-chan int {
+		addedStream := make(chan int)
+		go func() {
+			defer close(addedStream)
+			for i := range intStream {
+				select {
+				case <-done:
+					return
+				case addedStream <- i + additive:
+				}
+			}
+		}()
+		return addedStream
+	}
+	done := make(chan interface{})
+	defer close(done)
+	intStream := generator(done, 1, 2, 3, 4)
+	pipeline := multiply(done, add(done, multiply(done, intStream, 2), 1), 2)
+	for v := range pipeline {
+		fmt.Println(v)
+	}
+
+```
+
+## handy generators 
+
+here are some useful code you might reuse a lot in writing concurrent programs:
+
+
+* this repeat function will repeat the values passed forever until you stop it:
+
+
+```go
+repeat := func(
+		done <-chan interface{},
+		values ...interface{},
+	) <-chan interface{} {
+		valueStream := make(chan interface{})
+		go func() {
+			defer close(valueStream)
+			for {
+				for _, v := range values {
+					select {
+					case <-done:
+						return
+					case valueStream <- v:
+					}
+				}
+			}
+		}()
+		return valueStream
+	}
+```
+
+* this take function will only take n items from the stream, and will finish,
+and close the done channel
+
+```go
+
+take := func(
+		done <-chan interface{},
+		valueStream <-chan interface{},
+		num int,
+	) <-chan interface{} {
+		takeStream := make(chan interface{})
+		go func() {
+			defer close(takeStream)
+			for i := 0; i < num; i++ {
+				select {
+				case <-done:
+					return
+				case takeStream <- <-valueStream:
+				}
+			}
+		}()
+		return takeStream
+	}
+
+```
+
+## Fan-Out, Fan-In
+
+Basically, what happens when one of the stages of the pipeline
+is computationally expensive and you want to create parallel 
+goroutines to split the task up pulls from an upstream stage.
+And then we could then merge the results back in,
+this pattern is called the fan-out, fan-in pattern
+
+* you can use this pattern when both apply:
+
+	* it doesn't rely on values from the stages before
+	* it takes a long time to run
+
+
+lets start with this piece of code:
+
+this code takes the first 10 random numbers generated 
+by a stream, and is filtered by primeFinder, and 
+so only spits out the primes
+
+```go
+rand := func() interface{} { return rand.Intn(50000000) }
+	done := make(chan interface{})
+	defer close(done)
+	start := time.Now()
+	randIntStream := toInt(done, repeatFn(done, rand))
+	fmt.Println("Primes:")
+	for prime := range take(done, primeFinder(done, randIntStream), 10) {
+		fmt.Printf("\t%d\n", prime)
+	}
+	fmt.Printf("Search took: %v", time.Since(start))
+```
+
+there are two stages:
+
+* generating numbers
+
+* checking if the number is a prime
+
+so lets try fanning out:
+
+
+```go
+numFinders := runtime.NumCPU()
+finders := make([]<-chan int, numFinders)
+for i := 0; i < numFinders; i++ {
+	finders[i] = primeFinder(done, randIntStream)
+}
+```
+
+now we have x amount of goroutines depending on your pc, that is 
+pulling from random generator checking if it is prime
+
+
+but now we have a multiplexer that joins back the multiple streams,
+so we have a fan-in function:
+
+
+```go
+fanIn := func(
+		done <-chan interface{}, //we have a done channel to allow the goroutines to be torned down
+		channels ...<-chan interface{}, // we have a variadic slice of channels to handle the multiple channels that were fanned out
+	) <-chan interface{} {
+		var wg sync.WaitGroup // we need to use the sync.waitgroup so that we can wait for all channels to be drained 
+		multiplexedStream := make(chan interface{})
+		multiplex := func(c <-chan interface{}) { // the multiplex function reads from the channel passed and sends it to the multiplexed stream
+			defer wg.Done()
+			for i := range c {
+				select {
+				case <-done:
+					return
+				case multiplexedStream <- i:
+				}
+			}
+		}
+		// Select from all the channels
+		wg.Add(len(channels))// we add all the channels that are beinf fanned out to the waitgroup to be tracked of
+		for _, c := range channels {
+			go multiplex(c)
+		}
+		// Wait for all the reads to complete
+		go func() {
+			wg.Wait()
+			close(multiplexedStream)
+		}()
+		return multiplexedStream // returns the multiplexed stream 
+	}
+
+```
+
+## or-done channel
+
