@@ -2217,3 +2217,477 @@ queuing should be implemented either:
 
 
 ## The Context Package
+
+
+As we’ve seen, in concurrent programs it’s often necessary to preempt operations because of timeouts, cancellation, or failure of another portion of the system. We’ve looked at the idiom of creating a done channel, which flows through your program and cancels all blocking concurrent operations. This works well, but it’s also somewhat limited.
+
+
+It would be useful if we could have extra information alongside notification of cancelling, why its cancelled, or if there was a deadline for the function to complete.
+
+we have a lot of function in the context package to deal with these problems:
+
+
+```go
+var Canceled = errors.New("context canceled")
+var DeadlineExceeded error = deadlineExceededError{}
+type CancelFunc
+type Context
+func Background() Context
+func TODO() Context
+func WithCancel(parent Context) (ctx Context, cancel CancelFunc)
+func WithDeadline(parent Context, deadline time.Time) (Context, CancelFunc)
+func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)
+func WithValue(parent Context, key, val interface{}) Context
+
+```
+
+here's what the context interface looks like:
+
+
+```go
+type Context interface {
+	// Deadline returns the time when work done on behalf of this
+	// context should be canceled. Deadline returns ok==false when no
+	// deadline is set. Successive calls to Deadline return the same
+	// results.
+	Deadline() (deadline time.Time, ok bool)
+	// Done returns a channel that's closed when work done on behalf
+	// of this context should be canceled. Done may return nil if this
+	// context can never be canceled. Successive calls to Done return
+	// the same value.
+	Done() <-chan struct{}
+	// Err returns a non-nil error value after Done is closed. Err
+	// returns Canceled if the context was canceled or
+	// DeadlineExceeded if the context's deadline passed. No other
+	// values for Err are defined. After Done is closed, successive
+	// calls to Err return the same value.
+	Err() error
+	// Value returns the value associated with this context for key,
+	// or nil if no value is associated with key. Successive calls to
+	// Value with the same key returns the same result.
+	Value(key interface{}) interface{}
+}
+
+
+```
+
+Usually in these programs, request-specific information needs to be passed along in addition to information about preemption. This is the purpose of the Value function.
+
+
+for now we just need to know that the context package serves two primary purposes:
+
+
+* To provide an API for canceling branches of your call-graph.
+
+* To provide a data-bag for transporting request-scoped data through your call-graph.
+
+
+how do we deal with cancellations?
+
+
+cancellation in a function has three aspects:
+
+
+* a goroutine parent may want to cancel it
+
+* a goroutine may want to cancel its children
+
+* any blocking operations within a goroutine need to be preemptable so that it may be cancelled
+
+
+context is immutable but the functions here, returns a new context:
+
+
+```go
+func WithCancel(parent Context) (ctx Context, cancel CancelFunc)
+func WithDeadline(parent Context, deadline time.Time) (Context, CancelFunc)
+func WithTimeout(parent Context, timeout time.Duration) (Context, CancelFunc)
+```
+
+always pass instances of context since it may change at every stack frame
+
+
+At the top of your asynchronous call-graph, your code probably won’t have been passed a Context. To start the chain, the context package provides you with two functions to create empty instances of Context:
+
+```go
+func Background() Context
+func TODO() Context
+```
+
+Background simply returns an empty Context. TODO is not meant for use in production, but also returns an empty Context; TODO’s intended purpose is to serve as a placeholder for when you don’t know which Context to utilize, or if you expect your code to be provided with a Context, but the upstream code hasn’t yet furnished one.
+
+
+take a look at this example:
+
+```go
+func main() {
+	var wg sync.WaitGroup
+	done := make(chan interface{})
+	defer close(done)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := printGreeting(done); err != nil {
+			fmt.Printf("%v", err)
+			return
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := printFarewell(done); err != nil {
+			fmt.Printf("%v", err)
+			return
+		}
+	}()
+	wg.Wait()
+}
+func printGreeting(done <-chan interface{}) error {
+	greeting, err := genGreeting(done)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s world!\n", greeting)
+	return nil
+}
+func printFarewell(done <-chan interface{}) error {
+	farewell, err := genFarewell(done)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s world!\n", farewell)
+	return nil
+}
+func genGreeting(done <-chan interface{}) (string, error) {
+	switch locale, err := locale(done); {
+	case err != nil:
+		return "", err
+	case locale == "EN/US":
+		return "hello", nil
+	}
+	return "", fmt.Errorf("unsupported locale")
+}
+func genFarewell(done <-chan interface{}) (string, error) {
+	switch locale, err := locale(done); {
+	case err != nil:
+		return "", err
+	case locale == "EN/US":
+		return "goodbye", nil
+	}
+	return "", fmt.Errorf("unsupported locale")
+}
+func locale(done <-chan interface{}) (string, error) {
+	select {
+	case <-done:
+		return "", fmt.Errorf("canceled")
+	case <-time.After(1 * time.Minute):
+	}
+	return "EN/US", nil
+}
+
+/*
+Output:
+goodbye world!
+hello world!
+
+*/
+
+```
+
+diagram
+
+```
+     +-----------------------------------+
+     |                                   |
+     |    Main                           |
+     |                                   |
+     |                                   |
+     +-----------------------------------+
+     |                                   |
+     |                                   |
+     |                                   |
+     |                                   |
+     |                                   |
+     +----+------------------------------+------+
+          |                                     |
+          |                                     |
+          |                                     |
+          |                                     |
+          |                                     |
+    +-----+                                     |
+    |                                    +------v---------------------+
++---+----------------+                   |           print greeting   |
+|  print greeting    |                   |                            |
+|                    |                   +-----------------------------+
+|                    |                   |                            ++
++--------------------+                   |                            |
+|                    |                   |                            |
+|                    |                   |                            |
+|                    |                   |                            |
++-------------+------+                   +-------------------+--------+
+              |                                              |
+              |                                              |
+              |                                              |
+              |                                              |
+              |                                              |
+              |                                              |
+              |                                              |
+              |                                              |
+              |                                              |
+              |                               +--------------v---------------+
++-------------v-------------+                 |                              |
+|      gen greeting         |                 |      gen greeting            |
+|                           |                 ++                             |
++---------------------------+                 +------------------------------+
+|                           |                 |                              |
+|                           |                 |                              |
+|                           |                 |                              |
++------------+--------------+                 +--------------------+---------+
+             |                                                     |
+             |                                                     |
+             |                                                     |
+             |                                                     |
+             |                                           +---------+------------------+
+             |                                           |                            |
++------------+------------+                              |         locale             |
+|                         |                              +----------------------------+
+|      locale             |                              |                            |
+|                         |                              |                            |
++--------------------------+                             |                            |
+|                         |                              +----------------------------+
+|                         |
+|                         |
++-------------------------+
+
+```
+
+lets modify our code to use context:
+
+
+```go
+func main() {
+	var wg sync.WaitGroup
+	ctx, cancel := context.WithCancel(context.Background()) // here main creates a new context with context.Background() and wraps it with context.WithCancel to allow for cancellations
+	defer cancel()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := printGreeting(ctx); err != nil {
+			fmt.Printf("cannot print greeting: %v\n", err)
+			cancel() // on this line, main will cancel the context if there is an error returned from printGreeting
+		}
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := printFarewell(ctx); err != nil {
+			fmt.Printf("cannot print farewell: %v\n", err)
+		}
+	}()
+	wg.Wait()
+}
+func printGreeting(ctx context.Context) error {
+	greeting, err := genGreeting(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s world!\n", greeting)
+	return nil
+}
+func printFarewell(ctx context.Context) error {
+	farewell, err := genFarewell(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s world!\n", farewell)
+	return nil
+}
+func genGreeting(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 1*time.Second) //here genGreeting wraps its Context with context.WithTimeout. This will automatically cancel the returned Context after 1 second, thereby cancelling any children it passes the Context into, namely locale.
+	defer cancel()
+	switch locale, err := locale(ctx); {
+	case err != nil:
+		return "", err
+	case locale == "EN/US":
+		return "hello", nil
+	}
+	return "", fmt.Errorf("unsupported locale")
+}
+func genFarewell(ctx context.Context) (string, error) {
+	switch locale, err := locale(ctx); {
+	case err != nil:
+		return "", err
+	case locale == "EN/US":
+		return "goodbye", nil
+	}
+	return "", fmt.Errorf("unsupported locale")
+}
+func locale(ctx context.Context) (string, error) {
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err() //This line returns sthe reason why the Context was Cancelled. Te error will bubble all the way ip to main, which will cause cancellation at the function that called cancel()
+	case <-time.After(1 * time.Minute):
+	}
+	return "EN/US", nil
+}
+
+/*
+output:
+cannot print greeting: context deadline exceeded
+cannot print farewell: context canceled
+
+*/
+```
+
+
+We can make another improvement on this program: since we know locale takes roughly one minute to run, in locale we can check to see whether we were given a deadline, and if so, whether we’ll meet it. This example demonstrates using the context.Context’s Deadline method to do so:
+
+
+```go
+func locale(ctx context.Context) (string, error) {
+	if deadline, ok := ctx.Deadline(); ok { //Here we check to see whether our Context has provided a deadline. If it did, and our system’s clock has advanced past the deadline, we simply return with a special error defined in the context
+package, DeadlineExceeded.
+		if deadline.Sub(time.Now().Add(1*time.Minute)) <= 0 {
+			return "", context.DeadlineExceeded
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(1 * time.Minute):
+	}
+	return "EN/US", nil
+}
+
+```
+
+
+This brings us to the other half of what the context package provides: a data-bag for a Context to store and retrieve request-scoped data. Remember that oftentimes when a function creates a goroutine and Context, it’s starting a process that will service requests, and functions further down the stack may need information about the request. Here’s an example of how to store data within the Context, and how to retrieve it:
+
+
+```go
+func main() {
+	ProcessRequest("jane", "abc123")
+}
+func ProcessRequest(userID, authToken string) {
+	ctx := context.WithValue(context.Background(), "userID", userID)
+	ctx = context.WithValue(ctx, "authToken", authToken)
+	HandleResponse(ctx)
+}
+func HandleResponse(ctx context.Context) {
+	fmt.Printf(
+		"handling response for %v (%v)",
+		ctx.Value("userID"),
+		ctx.Value("authToken"),
+	)
+}
+
+/*
+output:
+handling response for jane (abc123)
+*/
+
+```
+
+Since both the Context’s key and value are defined as interface{}, we lose Go’s type-safety when attempting to retrieve values. The key could be a different type, or slightly different than the key we provide. The value could be a different type than we’re expecting. For these reasons, the Go authors recommend you follow a few rules when storing and retrieving value from a Context.
+
+
+First, they recommend you define a custom key-type in your package. As long as other packages do the same, this prevents collisions within the Context. As a reminder as to why, let’s take a look at a short program that attempts to store keys in a map that have different types, but the same underlying value:
+
+```go
+type foo int
+type bar int
+m := make(map[interface{}]int)
+m[foo(1)] = 1
+m[bar(1)] = 2
+fmt.Printf("%v", m)
+//This produces:
+map[1:1 1:2]
+```
+
+
+You can see that though the underlying values are the same, the different type information differentiates them within a map. Since the type you define for your package’s keys is unexported, other packages cannot conflict with keys you generate within your package.
+
+
+Since we don’t export the keys we use to store the data, we must therefore export functions that retrieve the data for us. This works out nicely since it allows consumers of this data to use static, type-safe
+functions.
+
+
+When you put all of this together, you get something like the following example:
+
+
+```go
+package main
+
+import (
+	"fmt"
+)
+
+func main() {
+	ProcessRequest("jane", "abc123")
+}
+
+type ctxKey int
+
+const (
+	ctxUserID ctxKey = iota
+	ctxAuthToken
+)
+
+func UserID(c context.Context) string {
+	return c.Value(ctxUserID).(string)
+}
+func AuthToken(c context.Context) string {
+	return c.Value(ctxAuthToken).(string)
+}
+func ProcessRequest(userID, authToken string) {
+	ctx := context.WithValue(context.Background(), ctxUserID, userID)
+	ctx = context.WithValue(ctx, ctxAuthToken, authToken)
+	HandleResponse(ctx)
+}
+func HandleResponse(ctx context.Context) {
+	fmt.Printf(
+		"handling response for %v (auth: %v)",
+		UserID(ctx),
+		AuthToken(ctx),
+	)
+}
+
+//Running this code produces:
+//handling response for jane (auth: abc123)
+
+```
+
+We now have a type-safe way to retrieve values from the Context, and — if the consumers were in a different package — they wouldn’t know or care what keys were used to store the information. 
+
+
+
+*Note on the value field of context:
+
+Use context values only for request-scoped data that transits processes and
+API boundaries, not for passing optional parameters to functions.
+
+
+1. The data should transit process or API boundaries.
+If you generate the data in your process’ memory, it’s probably not a good candidate to be requestscoped data unless you also pass it across an API boundary.
+
+
+2. The data should be immutable.
+If it’s not, then by definition what you’re storing did not come from the request.
+
+
+3. The data should trend toward simple types.
+If request-scoped data is meant to transit process and API boundaries, it’s much easier for the other
+side to pull this data out if it doesn’t also have to import a complex graph of packages.
+
+
+4. The data should be data, not types with methods.
+Operations are logic and belong on the things consuming this data.
+
+
+5. The data should help decorate operations, not drive them.
+If your algorithm behaves differently based on what is or isn’t included in its Context, you have
+likely crossed over into the territory of optional parameters.
+
+
+# Context At Scale
