@@ -2002,3 +2002,218 @@ fanIn := func(
 
 ## or-done channel
 
+when we want to encapsulate the function of handling when 
+the stream is done we could put it in a orDone function
+
+```go
+
+orDone := func(done, c <-chan interface{}) <-chan interface{} {
+		valStream := make(chan interface{})
+		go func() {
+			defer close(valStream)
+			for {
+				select {
+				case <-done:
+					return
+				case v, ok := <-c:
+					if ok == false {
+						return
+					}
+					select {
+					case valStream <- v:
+					case <-done:
+					}
+				}
+			}
+		}()
+		return valStream
+	}
+
+```
+
+Doing this allows us to get back to simple for loops, like so:
+```go
+for val := range orDone(done, myChan) {
+// Do something with val
+}
+```
+
+## the tee channel
+
+* when you want to split values coming in from a channel and send it
+into another part of your code base
+
+
+```go
+////in the function you can only write twice, and once one channel get
+//a value, it gets blocked with nil 
+//when two values are sent, then it should close the done 
+//channel and cleanup everything
+//this can be expanded to be more than just two
+tee := func(
+		done <-chan interface{},
+		in <-chan interface{},
+	) (_, _ <-chan interface{}) {
+		out1 := make(chan interface{})
+		out2 := make(chan interface{})
+		go func() {
+			defer close(out1)
+			defer close(out2)
+			for val := range orDone(done, in) {
+				var out1, out2 = out1, out2 // we want to use local versions of out1 and out2 so we  shadow out1 and out2
+				for i := 0; i < 2; i++ {
+					select {
+					case <-done:
+					case out1 <- val:
+						out1 = nil
+					case out2 <- val:
+						out2 = nil
+					}
+				}
+			}
+		}()
+		return out1, out2
+	}
+```
+
+
+## the bridge channel
+
+
+in go we can use a sequence of channels:
+
+```go
+<-chan <-chan interface{}
+```
+
+```go
+
+bridge := func(
+		done <-chan interface{},
+		chanStream <-chan <-chan interface{},
+	) <-chan interface{} {
+		valStream := make(chan interface{})// this channel that will return all values from bridge
+		go func() {
+			defer close(valStream)
+			for { // the loop is responsible for pulling channels off of chanStream and providing them to a nested loop for use
+				var stream <-chan interface{}
+				select {
+				case maybeStream, ok := <-chanStream:
+					if ok == false {
+						return
+					}
+					stream = maybeStream
+				case <-done:
+					return
+				}
+				for val := range orDone(done, stream) { // this loop is responsible for reading vbalues off the channel it has been given and repating those values onto valstream. when the stream we're currently looping over is closed, we break out of the loop performing the reads from this channel, and continue with the next iteration of the loop, selecting channels to read from. this provides us with an unbroken stream of values.
+					select {
+					case valStream <- val:
+					case <-done:
+					}
+				}
+			}
+		}()
+		return valStream
+	}
+
+	//Now we can use bridge to help present a single-channel facade over
+	//a channel of channels. Here’s an example that creates a series of 10 
+	//channels, each with one element
+	//written to them, and passes these channels into the bridge function:
+
+genVals := func() <-chan <-chan interface{} {
+		chanStream := make(chan (<-chan interface{}))
+		go func() {
+			defer close(chanStream)
+			for i := 0; i < 10; i++ {
+				stream := make(chan interface{}, 1)
+				stream <- i
+				close(stream)
+				chanStream <- stream
+			}
+		}()
+		return chanStream
+	}
+	for v := range bridge(nil, genVals()) {
+		fmt.Printf("%v ", v)
+	}
+
+```
+
+## Queuing 
+
+We can implement a queuing system with buffered channels, but usually it is our
+last resort in optimization just  because it can cause sync issues.
+
+
+It is important to know queuing never really speeds up the program, just changes
+the behavior.
+
+lets consider this example 
+
+```go
+done := make(chan interface{})
+defer close(done)
+zeros := take(done, 3, repeat(done, 0))
+short := sleep(done, 1*time.Second, zeros)
+long := sleep(done, 4*time.Second, short)
+pipeline := long
+
+```
+
+this took 13 seconds to finish
+
+This pipeline chains together four stages:
+
+
+1. A repeat stage that generates an endless stream of 0s.
+
+2. A stage that cancels the previous stages after seeing three items.
+
+3. A “short” stage that sleeps one second.
+
+4. A “long” stage that sleeps four seconds.
+
+
+What happens if we modify the pipeline to include a buffer?
+
+```go
+
+zeros := take(done, 3, repeat(done, 0))
+short := sleep(done, 1*time.Second, zeros)
+buffer := buffer(done, 2, short) // Buffers sends from short by 2
+long := sleep(done, 4*time.Second, short)
+pipeline := long
+
+```
+
+here the pipeline still took 13 seconds, but the short's stage runtime is cut from 9 seconds to 3 seconds
+
+
+so the  time it spent in a blocking state has been reduced.
+
+
+
+the true utility of queues is to decouple stages so that the runtime of one stage has no impact on the runtime of another. Decoupling stages in this manner then cascades to alter the runtime behavior of
+the system as a whole, which can be either good or bad depending on your system
+
+
+Let’s begin by analyzing situations in which queuing can increase the overall performance of your system.
+
+The only applicable situations are:
+
+* If batching requests in a stage saves time.
+
+* If delays in a stage produce a feedback loop into the system.
+
+
+queuing should be implemented either:
+
+
+* At the entrance to your pipeline.
+
+* In stages where batching will lead to higher efficiency.
+
+
+## The Context Package
