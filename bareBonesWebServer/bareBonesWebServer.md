@@ -58,10 +58,16 @@ func (this *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write(resp)
 		break
 	case method == "DELETE":
+		http.Error(w,"DELETE not implemented",http.StatusNotImplemented)
+		return
 		break
 	case method == "PATCH":
+		http.Error(w,"PATCH not implemented",http.StatusNotImplemented)
+		return
 		break
 	case method == "OPTIONS":
+		http.Error(w,"OPTIONS not implemented",http.StatusNotImplemented)
+		return
 		break
 	}
 }
