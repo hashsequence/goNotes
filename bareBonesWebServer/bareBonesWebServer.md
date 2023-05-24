@@ -42,6 +42,8 @@ func (this *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Write(resp)
 		break
 	case method == "PUT":
+		http.Error(w,"PUT not implemented",http.StatusNotImplemented)
+		return
 		break
 	case method == "POST":
 		req := &Request{}
